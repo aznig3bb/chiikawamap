@@ -111,7 +111,7 @@ input[type=text]{flex:1}
       <select id="count"><option value="20">가까운 20곳</option><option value="30" selected>가까운 30곳</option><option value="50">가까운 50곳</option><option value="100">가까운 100곳</option></select>
       <input type="text" id="filter" placeholder="매장명 필터">
     </div>
-    <div class="list" id="list"><div id="listA"><div class="empty">아직 표시할 매장이 없습니다.<br>위의 버튼으로 위치를 지정해 주세요.</div></div><div id="cmp"></div></div>
+    <div class="list" id="list"><div id="listA"><div class="empty">아직 표시할 매장이 없습니다.<br>위의 버튼으로 위치를 지정해 주세요.</div></div></div>
     <div class="notes">
       PDF 안내 사항
       <ul>
@@ -131,7 +131,6 @@ input[type=text]{flex:1}
       <div><span class="pin"></span>리스트에 있는 패밀리마트</div>
       <div><span class="pin approx"></span>리스트에 있음 (대략 위치)</div>
       <div><span class="pin" style="background:#ff5a1f"></span>내 위치</div>
-      <div><span class="pin" style="background:#9aa0a6"></span>리스트에 없는 패밀리마트 (미취급 추정)</div>
       </div>
     </div>
   </div>
@@ -160,10 +159,9 @@ function setStatus(t,err,prog){
 
 
 /* loading badge */
-const tasks=new Map(); let badgeErr=null;
+const tasks=new Map();
 function renderTasks(){
   const b=$('loading');
-  if(badgeErr){b.className='err';b.style.display='flex';b.innerHTML='<span>'+esc(badgeErr)+'</span><button id="btnRetry">다시 시도</button>';$('btnRetry').onclick=retryOsm;return;}
   if(!tasks.size){b.style.display='none';b.className='';return;}
   b.className='';b.style.display='flex';b.innerHTML='<span class="spin"></span><span>'+esc([...tasks.values()].join(' / '))+'</span>';
 }
@@ -253,19 +251,17 @@ async function reversePref(lat,lng){
 }
 
 async function startSearch(lat,lng,opts){
-  const gen=++S.gen; S.user={lat,lng}; S.located=[]; S.order=[]; S.idx=0; S.cap=500; S.fitted=false; S.ready=false; S.busy=false; S.minR=CMP_R/1000; clearCmp(); tasks.clear(); badgeErr=null; renderTasks(); S.osmP=null; S.osmErr=null;
+  const gen=++S.gen; S.user={lat,lng}; S.located=[]; S.order=[]; S.idx=0; S.cap=500; S.fitted=false; S.ready=false; S.busy=false; S.minR=CMP_R/1000; tasks.clear(); renderTasks();
   S.target=parseInt($('count').value,10)||30;
   storeLayer.clearLayers(); $('listA').innerHTML='<div class="empty">가까운 매장을 찾는 중입니다...</div>';
   setUser(lat,lng,opts);
   if(!(opts&&opts.noMove)) map.setView([lat,lng],15);
-  $('cmp').innerHTML='<div class="cmphead"><span class="spin"></span>주변 패밀리마트 정보를 불러오는 중...</div>';
-  S.osmP=loadOsm(gen,lat,lng);
   task('list','근처 매장 위치를 찾는 중...');
   setStatus('위치한 지역을 확인하는 중...',false,0.02);
   let pc=await reversePref(lat,lng); if(gen!==S.gen)return;
   if(!pc){
     let best=null,bd=1e9; for(const c in PREFS){const d=hav(lat,lng,PREFS[c][1],PREFS[c][2]);if(d<bd){bd=d;best=c}}
-    if(bd>300){tasks.clear();renderTasks();$('cmp').innerHTML='';setStatus('지정한 위치가 일본 안이 아닌 것 같습니다. 일본 안의 위치를 선택해 주세요.',true);$('listA').innerHTML='<div class="empty">일본 안의 위치를 지정하면 근처 매장을 보여드립니다.</div>';return;}
+    if(bd>300){tasks.clear();renderTasks();setStatus('지정한 위치가 일본 안이 아닌 것 같습니다. 일본 안의 위치를 선택해 주세요.',true);$('listA').innerHTML='<div class="empty">일본 안의 위치를 지정하면 근처 매장을 보여드립니다.</div>';return;}
     pc=best;
   }
   const near=Object.keys(PREFS).filter(c=>c!==pc&&hav(lat,lng,PREFS[c][1],PREFS[c][2])<=70);
@@ -283,7 +279,7 @@ async function startSearch(lat,lng,opts){
   const cand=[]; DATA.stores.forEach((s,si)=>{if(names.has(DATA.munis[s[3]][0]))cand.push({si,md:md(s[3])})});
   cand.sort((a,b)=>a.md-b.md); S.order=cand; S.ready=true;
   await pump(gen);
-  if(gen===S.gen){untask('list');runCompare(gen);}
+  if(gen===S.gen)untask('list');
 }
 
 async function locateStore(o){
@@ -387,121 +383,7 @@ $('filter').oninput=()=>{if(S.user)render(!S.busy)};
 PRESETS.forEach(([n,la,ln])=>{const b=document.createElement('button');b.className='chip';b.textContent=n;b.onclick=()=>startSearch(la,ln,{label:n});$('chips').appendChild(b)});
 map.on('click',e=>{if($('clickMode').checked)startSearch(e.latlng.lat,e.latlng.lng,{label:'지정한 위치',noMove:true})});
 
-/* compare with OpenStreetMap FamilyMart */
 const CMP_R=1000;
-const cmpLayer=L.layerGroup().addTo(map); let cmpItems=[];
-function clearCmp(){cmpLayer.clearLayers();cmpItems=[];const c=document.getElementById('cmp');if(c)c.innerHTML='';}
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function overpass(lat,lng,R,onTry){
-  const q=`[out:json][timeout:20];(nwr["brand"="ファミリーマート"](around:${R},${lat},${lng});nwr["brand:en"="FamilyMart"](around:${R},${lat},${lng});nwr["brand:ja"="ファミリーマート"](around:${R},${lat},${lng}););out center tags qt;`;
-  const eps=['https://overpass.osm.jp/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
-  const errs=[];
-  for(const ep of eps){
-    for(const mode of ['POST','GET']){
-      const ac=new AbortController(); const to=setTimeout(()=>ac.abort(),20000);
-      try{
-        if(onTry)onTry(ep);
-        const r=mode==='POST'
-          ? await fetch(ep,{method:'POST',body:new URLSearchParams({data:q}),signal:ac.signal})
-          : await fetch(ep+'?data='+encodeURIComponent(q),{signal:ac.signal});
-        clearTimeout(to);
-        if(!r.ok)throw new Error('HTTP '+r.status);
-        const j=await r.json();
-        if(!j||!Array.isArray(j.elements))throw new Error('응답 형식 오류');
-        return j.elements;
-      }catch(e){
-        clearTimeout(to);
-        errs.push(new URL(ep).host+' '+mode+': '+(e.name==='AbortError'?'시간 초과':e.message));
-        if(mode==='POST'&&!/HTTP (429|5\d\d)|시간 초과/.test(errs[errs.length-1])===false) break;
-      }
-    }
-  }
-  const err=new Error(errs.slice(-3).join(' / ')); err.all=errs; throw err;
-}
-const normName=s=>(s||'').normalize('NFKC').replace(/ファミリーマート|ファミマ!*|FamilyMart/gi,'').replace(/[\s\/]/g,'').replace(/店$/,'');
-function toOsm(els,lat,lng){
-  const seen=new Set(), osm=[];
-  for(const e of els){
-    const tg=e.tags||{}; if(tg.amenity==='atm')continue;
-    const la=e.lat??(e.center&&e.center.lat), ln=e.lon??(e.center&&e.center.lon);
-    if(la==null||seen.has(e.type+e.id))continue; seen.add(e.type+e.id);
-    osm.push({id:e.type+'/'+e.id,name:tg['name:ja']||tg.name||'ファミリーマート',lat:la,lng:ln,d:hav(lat,lng,la,ln)});
-  }
-  return osm;
-}
-async function loadOsm(gen,lat,lng){
-  task('osm','주변 패밀리마트 정보를 불러오는 중...');
-  let last=null;
-  for(let a=1;a<=3;a++){
-    try{
-      const els=await overpass(lat,lng,CMP_R,null);
-      if(gen!==S.gen)return null;
-      untask('osm'); return toOsm(els,lat,lng);
-    }catch(e){
-      last=e; console.error(e.all||e);
-      if(gen!==S.gen)return null;
-      if(a<3){task('osm','주변 패밀리마트 정보를 다시 불러오는 중... ('+a+'/2)');await sleep(2000*a);}
-    }
-  }
-  S.osmErr=last?last.message:'알 수 없는 오류';
-  untask('osm'); return null;
-}
-async function runCompare(gen){
-  const u=S.user, osm=await S.osmP;
-  if(gen!==S.gen)return;
-  if(!osm){
-    badgeErr='주변 패밀리마트 정보를 불러오지 못했습니다.';renderTasks();
-    $('cmp').innerHTML='<div class="cmphead">주변 패밀리마트 정보를 불러오지 못했습니다.<br><small>'+esc(S.osmErr||'')+'</small></div>';
-    setStatus('리스트에 있는 매장만 표시했습니다. 지도 위의 [다시 시도]를 눌러 주세요.',true);
-    return;
-  }
-  await finishCompare(osm,CMP_R,gen,u,'OpenStreetMap');
-}
-function retryOsm(){
-  if(!S.user)return; const gen=S.gen; badgeErr=null; renderTasks();
-  $('cmp').innerHTML='<div class="cmphead"><span class="spin"></span>주변 패밀리마트 정보를 불러오는 중...</div>';
-  S.osmP=loadOsm(gen,S.user.lat,S.user.lng); runCompare(gen);
-}
-async function finishCompare(osm,R,gen,u,src){
-  L.circle([u.lat,u.lng],{radius:R,color:'#ff5a1f',weight:1.5,dashArray:'6 6',fill:false,interactive:false}).addTo(cmpLayer);
-  task('cmp','리스트와 비교하는 중...');
-  S.minR=R/1000; S.cap=Math.max(S.cap,S.idx+600);
-  while(S.busy){await sleep(300); if(gen!==S.gen)return;}
-  await pump(gen); if(gen!==S.gen)return;
-  const lp=S.located.filter(x=>x.d<=R/1000+0.5);
-  const ln=lp.map(x=>({x,n:normName(DATA.stores[x.si][0])}));
-  let matched=0; const un=[];
-  for(const o of osm){
-    const on=normName(o.name);
-    const hit=ln.find(({x,n})=>(x.lvl<3&&hav(o.lat,o.lng,x.lat,x.lng)<0.08)||(n&&on&&n===on&&hav(o.lat,o.lng,x.lat,x.lng)<0.8));
-    if(hit)matched++; else un.push(o);
-  }
-  un.sort((a,b)=>a.d-b.d); cmpItems=un;
-  un.forEach((o,i)=>{
-    const dir=`https://www.google.com/maps/dir/?api=1&destination=${o.lat},${o.lng}&travelmode=walking`;
-    const mk=L.marker([o.lat,o.lng],{icon:L.divIcon({className:'',html:'<div class="pin" style="background:#9aa0a6;align-items:center;padding-top:0">×</div>',iconSize:[34,34],iconAnchor:[17,17]})}).addTo(cmpLayer);
-    mk.bindPopup(`<div class="pop"><b>${esc(o.name)}</b><div>리스트에 없음 (미취급 추정)</div><div>현재 위치에서 약 ${fmt(o.d)}</div><div style="margin-top:6px"><a href="${dir}" target="_blank" rel="noopener">길찾기</a>${o.id.startsWith('file')?'':`<a href="https://www.openstreetmap.org/${o.id}" target="_blank" rel="noopener">OSM 정보</a>`}</div></div>`);
-    o.mk=mk;
-  });
-  const box=$('cmp');
-  box.innerHTML=`<div class="cmphead"><b>리스트에 없는 패밀리마트 ${un.length}곳</b><br>반경 ${R/1000}km 안의 ${src} 패밀리마트 ${osm.length}곳 중 ${matched}곳은 리스트와 일치, ${un.length}곳은 리스트에 없음<br>${un.length?'<button class="chip" id="btnCsv">CSV로 저장</button>':''}</div>`;
-  un.forEach((o,i)=>{
-    const el=document.createElement('div'); el.className='item';
-    el.innerHTML=`<div class="num gray">×</div><div><b>${esc(o.name)}</b><small>${o.id.startsWith('file')?'불러온 파일':'OSM '+esc(o.id)}</small></div><div class="dist" style="color:#6f6679">${fmt(o.d)}</div>`;
-    el.onclick=()=>{map.setView([o.lat,o.lng],Math.max(map.getZoom(),16));o.mk.openPopup();if(window.innerWidth<=820)window.scrollTo({top:0,behavior:'smooth'})};
-    box.appendChild(el);
-  });
-  const b=document.getElementById('btnCsv'); if(b)b.onclick=exportCsv;
-  untask('cmp');
-  setStatus(`반경 1km: 리스트에 있는 패밀리마트 ${matched}곳(초록 핀), 리스트에 없는 곳 ${un.length}곳(회색 핀)을 표시했습니다.`);
-  map.fitBounds(L.circle([u.lat,u.lng],{radius:R}).getBounds().pad(0.1));
-}
-function exportCsv(){
-  const rows=[['name','lat','lng','distance_km','osm']].concat(cmpItems.map(o=>[o.name,o.lat,o.lng,o.d.toFixed(2),'https://www.openstreetmap.org/'+o.id]));
-  const csv='\ufeff'+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='familymart_not_in_list.csv'; a.click();
-}
-
 $('legendT').onclick=()=>{const l=$('legend');l.classList.toggle('collapsed');$('legendT').textContent=l.classList.contains('collapsed')?'범례 ▸':'범례 ▾';};
 if(window.innerWidth<=820){$('legend').classList.add('collapsed');$('legendT').textContent='범례 ▸';}
 window.addEventListener('resize',()=>map.invalidateSize());
